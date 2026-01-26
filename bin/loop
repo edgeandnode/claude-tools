@@ -1,0 +1,129 @@
+#! /bin/bash
+#
+# Autonomous Claude loop runner
+#
+# Runs Claude iteratively in a sandbox to work through tasks. Each iteration
+# executes Claude with a prompt (either from a file or generated from study
+# files) and continues until either:
+#   - The stop file is created (by Claude when done, or manually)
+#   - Maximum iterations are reached (default: 20)
+#   - Claude exits with an error
+#
+# Files created in target/loop/:
+#   stop          - Signal file to halt the loop. Claude creates this when all
+#                   tasks are complete, or create it manually to stop early.
+#   progress.txt  - Log of iteration start/end times
+#   iter-N.json   - JSON stream output from iteration N (0-indexed)
+#   prev/         - Directory containing all iter-N.json files from the previous
+#                   run
+#
+# Dependencies:
+#   clox     - install from https://github.com/edgeandnode/clox
+#   sandbox  - create a symlink from 'sandbox' somewhere on your PATH to one
+#              of the scripts in sandbox/
+#   git      - assumes that cwd is inside a git repository
+
+set -o pipefail
+
+usage() {
+    echo "Usage: $0 [-f <prompt-file> | -s <file>...] [-n <max-iterations>]" >&2
+    echo "  -f <prompt-file>    Use prompt from file" >&2
+    echo "  -s <file>           Study file(s) and work on tasks (can be repeated)" >&2
+    echo "  -n <max-iterations> Maximum number of iterations (default: 20)" >&2
+    exit 1
+}
+
+# CLean up from a previous run. Call as 'cleanup "$loop_dir"'
+cleanup() {
+    local dir=$1
+    rm -f "$dir/stop"
+    rm -rf "$dir/prev"
+    if [ -f "$dir/iter-0.json" ]; then
+        mkdir "$dir/prev"
+        mv "$dir"/iter-*.json "$dir/prev/"
+    fi
+}
+
+prompt_file=""
+study_files=()
+max_iter=20
+
+while getopts "f:s:n:" opt; do
+    case $opt in
+        f) prompt_file="$OPTARG" ;;
+        s) study_files+=("$OPTARG") ;;
+        n) max_iter="$OPTARG" ;;
+        *) usage ;;
+    esac
+done
+
+if [ -z "$prompt_file" ] && [ ${#study_files[@]} -eq 0 ]; then
+    usage
+fi
+
+if [ -n "$prompt_file" ] && [ ${#study_files[@]} -gt 0 ]; then
+    echo "Error: -f and -s are mutually exclusive" >&2
+    exit 1
+fi
+
+# Build prompt
+if [ -n "$prompt_file" ]; then
+    prompt=$(<"$prompt_file")
+else
+    prompt=""
+    for f in "${study_files[@]}"; do
+        prompt+="study $f; "
+    done
+    prompt+="pick the most important open task from the plan and implement it. "
+    prompt+="Make sure to commit changes following the instructions and mark tasks as done as you progress. "
+    prompt+="Exit when you have finished a task. "
+    prompt+="When there are no tasks remaining, create the file target/loop/stop and write 'done at <current time>' into it"
+fi
+
+if ! command -v clox &> /dev/null; then
+    echo "Error: 'clox' is not available. Please install it first" >&2
+    exit 1
+fi
+
+if ! command -v sandbox &> /dev/null; then
+    echo "Error: 'sandbox' is not available. Please install it first" >&2
+    exit 1
+fi
+
+top_dir="$(realpath "$(git rev-parse --show-toplevel)")"
+export top_dir
+
+loop_dir="$top_dir/target/loop"
+stop_file="$loop_dir/stop"
+loop_progress="$loop_dir/progress.txt"
+
+mkdir -p "$loop_dir"
+cleanup "$loop_dir"
+
+echo "Start looping at $(date)" > "$loop_progress"
+iter=0
+while true
+do
+    # Check for stop signal
+    if [ -f "$stop_file" ]
+    then
+        echo "Stop signal detected ($stop_file exists). Exiting."
+        break
+    fi
+
+    echo "Started loop ${iter} at $(date)" >> "$loop_progress"
+    args='-p --dangerously-skip-permissions --output-format stream-json --verbose'
+    if ! sandbox claude $args <<< "$prompt" | \
+            tee "$loop_dir/iter-${iter}.json" | clox -
+    then
+        echo "Aborting loop because of an error" | tee -a "$loop_progress"
+        exit 1
+    fi
+    echo "Finished loop ${iter} at $(date)" >> "$loop_progress"
+
+    if [ "$iter" -ge "$max_iter" ]; then
+        echo "Max iterations reached."
+        break
+    fi
+    ((iter++))
+done

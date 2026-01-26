@@ -1,0 +1,80 @@
+#! /bin/bash
+#
+# Sandboxed shell using bubblewrap (bwrap)
+#
+# Creates an isolated environment with:
+#   - Read-only access to system directories (/usr, /lib, /bin, etc.)
+#   - Read-only access to select home directory configs (.cargo, .rustup, .claude, etc.)
+#   - Read-write access to the current git repository
+#   - Fresh /tmp, isolated PID namespace, resource limits
+#
+# Git worktree support:
+#   Works correctly with git worktrees by binding both the worktree directory
+#   and the common git directory (where .git lives). This allows git operations
+#   to function properly since worktrees reference the main repository's .git.
+#
+# Usage: bubblewrap [command...]
+#   Without arguments, starts an interactive bash shell.
+#   With arguments, executes the given command in the sandbox.
+#
+# Dependencies: bwrap (bubblewrap), prlimit, git
+#
+
+# The git directory from which we were called (probably a worktree)
+top_dir="$(realpath "$(git rev-parse --show-toplevel)")"
+
+# The base git directory, i.e. the main dir for worktrees
+common_dir="$(dirname "$(realpath "$(cd "$top_dir" && git rev-parse --git-common-dir)")")"
+
+if (( "${#@}" == 0 ))
+then
+    cmds=("/bin/bash")
+else
+    cmds=("${@}")
+fi
+
+bwrap \
+     --new-session \
+     --die-with-parent \
+     --share-net \
+     --unshare-pid \
+     --ro-bind /usr /usr \
+     --ro-bind /lib /lib \
+     --ro-bind /lib64 /lib64 \
+     --ro-bind /bin /bin \
+     --ro-bind /etc/alternatives /etc/alternatives \
+     --ro-bind /etc/crypto-policies /etc/crypto-policies \
+     --ro-bind /etc/group /etc/group \
+     --ro-bind /etc/hosts /etc/hosts \
+     --ro-bind /etc/localtime /etc/localtime \
+     --ro-bind /etc/passwd /etc/passwd \
+     --ro-bind /etc/pki /etc/pki \
+     --ro-bind /etc/resolv.conf /etc/resolv.conf \
+     --ro-bind /etc/ssl /etc/ssl \
+     --ro-bind "$HOME/.gitignore" "$HOME/.gitignore" \
+     --ro-bind "$HOME/.local" "$HOME/.local" \
+     --bind "$HOME/.local/share/claude/" "$HOME/.local/share/claude/" \
+     --ro-bind "$HOME/.cargo" "$HOME/.cargo" \
+     --ro-bind "$HOME/.rustup" "$HOME/.rustup" \
+     --ro-bind "$HOME/.claude.json" "$HOME/.claude.json" \
+     --ro-bind "$HOME/.claude" "$HOME/.claude" \
+     --bind "$HOME/.claude/cache" "$HOME/.claude/cache" \
+     --bind "$HOME/.claude/debug" "$HOME/.claude/debug" \
+     --bind "$HOME/.claude/projects" "$HOME/.claude/projects" \
+     --bind "$HOME/.claude/session-env" "$HOME/.claude/session-env" \
+     --bind "$HOME/.claude/statsig" "$HOME/.claude/statsig" \
+     --bind "$HOME/.claude/todos" "$HOME/.claude/todos" \
+     --bind "$top_dir" "$top_dir" \
+     --bind "$common_dir" "$common_dir" \
+     --tmpfs /tmp \
+     --proc /proc \
+     --dev /dev \
+     --chdir "$top_dir" \
+     --clearenv \
+     --setenv PATH "$PATH" \
+     --setenv TERM "ansi" \
+     --setenv HOME "$HOME" \
+     --setenv THEGRAPH_STORE_POSTGRES_DIESEL_URL "$THEGRAPH_STORE_POSTGRES_DIESEL_URL" \
+     --setenv GRAPH_NODE_TEST_CONFIG "$GRAPH_NODE_TEST_CONFIG" \
+     --setenv SANDBOX_RUNTIME 1 \
+     prlimit --nofile=1024 --nproc=256 -- "${cmds[@]}"
