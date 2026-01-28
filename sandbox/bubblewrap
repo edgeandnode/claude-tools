@@ -54,6 +54,8 @@ bwrap \
      --ro-bind "$HOME/.gitignore" "$HOME/.gitignore" \
      --ro-bind "$HOME/.gitconfig" "$HOME/.gitconfig" \
      --ro-bind "$HOME/.local" "$HOME/.local" \
+     --ro-bind "$HOME/.gnupg" "$HOME/.gnupg" \
+     --bind "/run/user/$(id -u)/gnupg" "/run/user/$(id -u)/gnupg" \
      --bind "$HOME/.local/share/claude/" "$HOME/.local/share/claude/" \
      --ro-bind "$HOME/.cargo" "$HOME/.cargo" \
      --ro-bind "$HOME/.rustup" "$HOME/.rustup" \
