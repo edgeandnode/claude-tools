@@ -9,7 +9,7 @@
 #   - Maximum iterations are reached (default: 20)
 #   - Claude exits with an error
 #
-# Files created in target/loop/:
+# Files created in target/loop/ (or the directory specified with -d):
 #   stop          - Signal file to halt the loop. Claude creates this when all
 #                   tasks are complete, or create it manually to stop early.
 #   progress.txt  - Log of iteration start/end times
@@ -26,10 +26,11 @@
 set -o pipefail
 
 usage() {
-    echo "Usage: $0 [-f <prompt-file> | -s <file>...] [-n <max-iterations>]" >&2
+    echo "Usage: $0 [-f <prompt-file> | -s <file>...] [-n <max-iterations>] [-d <directory>]" >&2
     echo "  -f <prompt-file>    Use prompt from file" >&2
     echo "  -s <file>           Study file(s) and work on tasks (can be repeated)" >&2
     echo "  -n <max-iterations> Maximum number of iterations (default: 20)" >&2
+    echo "  -d <directory>      State directory (default: target/loop)" >&2
     exit 1
 }
 
@@ -47,9 +48,11 @@ cleanup() {
 prompt_file=""
 study_files=()
 max_iter=20
+loop_subdir="target/loop"
 
-while getopts "f:s:n:" opt; do
+while getopts "d:f:s:n:" opt; do
     case $opt in
+        d) loop_subdir="$OPTARG" ;;
         f) prompt_file="$OPTARG" ;;
         s) study_files+=("$OPTARG") ;;
         n) max_iter="$OPTARG" ;;
@@ -77,7 +80,7 @@ else
     prompt+="pick the most important open task from the plan and implement it. "
     prompt+="Make sure to commit changes following the instructions and mark tasks as done as you progress. "
     prompt+="Exit when you have finished a task. "
-    prompt+="When there are no tasks remaining, create the file target/loop/stop and write 'done at <current time>' into it"
+    prompt+="When there are no tasks remaining, create the file $loop_subdir/stop and write 'done at <current time>' into it"
 fi
 
 if ! command -v clox &> /dev/null; then
@@ -93,7 +96,11 @@ fi
 top_dir="$(realpath "$(git rev-parse --show-toplevel)")"
 export top_dir
 
-loop_dir="$top_dir/target/loop"
+if [[ "$loop_subdir" = /* ]]; then
+    loop_dir="$loop_subdir"
+else
+    loop_dir="$top_dir/$loop_subdir"
+fi
 stop_file="$loop_dir/stop"
 loop_progress="$loop_dir/progress.txt"
 
